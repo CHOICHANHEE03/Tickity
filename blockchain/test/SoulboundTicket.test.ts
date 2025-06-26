@@ -1,77 +1,74 @@
-// 파일: test/SoulboundTicket.test.ts
+import { expect } from 'chai';
+import { ethers } from 'hardhat';
 
-import { expect } from "chai";
-import { ethers } from "hardhat";
-import { solidity } from "ethereum-waffle";
-import chai from "chai";
-
-// Waffle의 solidity matcher (.to.be.revertedWith, .to.emit 등) 등록
-// npm install --save-dev @types/mocha @types/chai
-chai.use(solidity);
-
-describe("SoulboundTicket 컨트랙트", function () {
-  let SoulboundTicket: any;
-  let ticket: any;
-  let owner: any;
-  let alice: any;
+describe('SoulboundTicket', () => {
+  let admin: any;
+  let user: any;
+  let ticketAdmin: any;
+  let ticketUser: any;
 
   beforeEach(async () => {
-    // 테스트용 계정 배열 가져오기
-    [owner, alice] = await ethers.getSigners();
+    [admin, user] = await ethers.getSigners();
+    const Factory = await ethers.getContractFactory('SoulboundTicket', admin);
 
-    // 컨트랙트 팩토리 가져오기
-    SoulboundTicket = await ethers.getContractFactory("SoulboundTicket");
-    // 배포
-    ticket = await SoulboundTicket.deploy();
-    await ticket.deployed();
+    // 1) admin 서명자로 배포
+    ticketAdmin = await Factory.deploy(admin.address);
+    await ticketAdmin.deployed();
+
+    // 2) user 서명자도 명시적으로 연결
+    ticketUser = ticketAdmin.connect(user);
   });
 
-  it("초기 nextTokenId는 1이어야 합니다", async () => {
-    const nextId = await ticket.nextTokenId();
-    expect(nextId).to.equal(1);
+  it('mintTicket: 올바른 금액으로 mint 되고, fee가 admin에게 전송된다', async () => {
+    const priceWei = ethers.utils.parseEther('0.05');
+    const fee      = priceWei.mul(1).div(1000);
+    const net      = priceWei.sub(fee);
+
+    const balBefore = await admin.getBalance();
+    await ticketUser.mintTicket(1, 'A-01', 'uri', priceWei, {
+      value: priceWei,
+    });
+    const balAfter = await admin.getBalance();
+    expect(balAfter.sub(balBefore)).to.equal(fee);
+
+    expect(await ticketAdmin.ownerOf(1)).to.equal(user.address);
+    const info = await ticketAdmin.tickets(1);
+    expect(info.price).to.equal(net);
+    expect(await ticketAdmin.tokenURI(1)).to.equal('uri');
   });
 
-  it("mintTicket 호출 시 Transfer 이벤트가 발생해야 합니다", async () => {
+  it('approve, transfer가 불가능해야 한다', async () => {
+    const priceWei = ethers.utils.parseEther('0.05');
+    await ticketUser.mintTicket(2, 'B-02', 'uri2', priceWei, {
+      value: priceWei,
+    });
+
     await expect(
-      ticket
-        .connect(alice)
-        .mintTicket(100, "A1", "ipfs://token-uri", { value: ethers.utils.parseEther("0.1") })
-    )
-      .to.emit(ticket, "Transfer")
-      .withArgs(ethers.constants.AddressZero, alice.address, 1);
-  });
-
-  it("전송 시도 시 ‘SBT: 전송 불가’로 revert 되어야 합니다", async () => {
-    // 1) 먼저 티켓 민팅
-    await ticket
-      .connect(alice)
-      .mintTicket(200, "B2", "ipfs://token-uri", { value: ethers.utils.parseEther("0.1") });
-    // 2) 전송 시도
+      ticketUser.approve(user.address, 2)
+    ).to.be.revertedWith('SBT: approval disabled');
     await expect(
-      ticket.connect(alice).transferFrom(alice.address, owner.address, 1)
-    ).to.be.revertedWith("SBT: 전송 불가");
+      ticketUser.transferFrom(user.address, admin.address, 2)
+    ).to.be.revertedWith('SBT: transfer disabled');
   });
 
-  it("얼굴 해시 등록 → 인증 → 사용 흐름이 정상 동작해야 합니다", async () => {
-    // 1) mint
-    await ticket
-      .connect(alice)
-      .mintTicket(300, "C3", "ipfs://token-uri", { value: ethers.utils.parseEther("0.1") });
+  it('onlyOwner 역할 함수들(registerFaceHash → markFaceVerified → markAsUsed) 동작 확인', async () => {
+    const priceWei = ethers.utils.parseEther('0.05');
+    await ticketUser.mintTicket(3, 'C-03', 'uri3', priceWei, {
+      value: priceWei,
+    });
 
-    // 2) owner가 얼굴 해시 등록
-    const fakeHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("face123"));
-    await ticket.registerFaceHash(1, fakeHash);
-    const infoAfterHash = await ticket.tickets(1);
-    expect(infoAfterHash.faceHash).to.equal(fakeHash);
+    // 일반 사용자는 실패
+    await expect(
+      ticketUser.registerFaceHash(1, ethers.utils.formatBytes32String('h'))
+    ).to.be.revertedWith('Ownable: caller is not the owner');
 
-    // 3) owner가 얼굴 인증 처리
-    await ticket.markFaceVerified(1);
-    const infoAfterVerify = await ticket.tickets(1);
-    expect(infoAfterVerify.isFaceVerified).to.be.true;
+    // owner만 성공
+    await ticketAdmin.registerFaceHash(1, ethers.utils.formatBytes32String('h'));
+    await ticketAdmin.markFaceVerified(1);
+    await ticketAdmin.markAsUsed(1);
 
-    // 4) owner가 입장 처리
-    await ticket.markAsUsed(1);
-    const infoAfterUse = await ticket.tickets(1);
-    expect(infoAfterUse.isUsed).to.be.true;
+    const t = await ticketAdmin.tickets(1);
+    expect(t.isFaceVerified).to.be.true;
+    expect(t.isUsed).to.be.true;
   });
 });

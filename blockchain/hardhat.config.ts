@@ -4,6 +4,17 @@ import "@nomiclabs/hardhat-ethers";
 // Waffle/Chai 매처 연결
 import "@nomiclabs/hardhat-waffle";
 import "@nomicfoundation/hardhat-network-helpers";
+import * as fs from 'fs-extra';
+import * as path from 'path';
+
+const adminWalletPath = path.resolve(__dirname, './config/adminWallet.json');
+if (!fs.existsSync(adminWalletPath)) {
+  throw new Error(
+    `관리자 지갑 정보가 없습니다. \`npm run init:admin\` 을 먼저 실행하세요.`
+  );
+}
+
+const { privateKey: adminPrivateKey } = fs.readJSONSync(adminWalletPath);
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -23,7 +34,13 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
-      // 필요한 옵션이 있으면 여기다가 추가
+        accounts: [
+        {
+          privateKey: adminPrivateKey,
+          balance:    '1000000000000000000000', // 1 000 ETH
+        },
+        // 필요 시 추가 테스트 계정 여기에 삽입
+      ]
     },
   },
 };

@@ -1,64 +1,57 @@
-import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
-import { ethers } from "hardhat";
-import { expect } from "chai";
+import { expect } from 'chai';
+import { ethers } from 'hardhat';
 
-describe("Lock", function () {
-  const ONE_HOUR_IN_SECS = 60 * 60;
+describe('Lock', () => {
+  let lock: any;
+  let owner: any;
+  let nonOwner: any;
+  const ONE_DAY = 24 * 60 * 60;
 
-  async function deployLockFixture() {
-    const [owner, other] = await ethers.getSigners();
-    const latestTime = await time.latest();
-    const unlockTime = latestTime + ONE_HOUR_IN_SECS;
+  beforeEach(async () => {
+    [owner, nonOwner] = await ethers.getSigners();
+    // ① on-chain 현재 시간 조회
+    const now = (await ethers.provider.getBlock('latest')).timestamp;
+    const unlockTime = now + ONE_DAY;
 
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, {
-      value: ethers.utils.parseEther("1.0"),
+    const Factory = await ethers.getContractFactory('Lock', owner);
+    lock = await Factory.deploy(unlockTime, {
+      value: ethers.utils.parseEther('1'),
     });
     await lock.deployed();
-
-    return { lock, unlockTime, owner, other };
-  }
-
-  it("constructor: unlockTime은 미래여야 한다", async function () {
-    const latest = await time.latest();
-    const Lock = await ethers.getContractFactory("Lock");
-    await expect(Lock.deploy(latest - 1, { value: 0 }))
-      .to.be.revertedWith("Unlock time should be in the future");
   });
 
-  it("constructor: 예치한 ETH가 컨트랙트에 쌓인다", async function () {
-    const { lock } = await loadFixture(deployLockFixture);
-    const balance = await ethers.provider.getBalance(lock.address);
-    expect(balance).to.equal(ethers.utils.parseEther("1.0"));
+  it('constructor: unlockTime은 미래여야 한다', async () => {
+    // 생성자 실패 케이스도 on-chain 시간 기준
+    const { timestamp: now } = await ethers.provider.getBlock('latest');
+    await expect(
+      (await ethers.getContractFactory('Lock')).deploy(now - 1, {
+        value: ethers.utils.parseEther('1'),
+      })
+    ).to.be.revertedWith('Unlock time should be in the future');
   });
 
-  describe("withdraw", function () {
-    it("unlockTime 이전에는 출금 불가", async function () {
-      const { lock } = await loadFixture(deployLockFixture);
+  it('constructor: 예치한 ETH가 컨트랙트에 쌓인다', async () => {
+    const bal = await ethers.provider.getBalance(lock.address);
+    expect(bal).to.equal(ethers.utils.parseEther('1'));
+  });
+
+  describe('withdraw', () => {
+    it('unlockTime 이전에는 출금 불가', async () => {
       await expect(lock.withdraw()).to.be.revertedWith("You can't withdraw yet");
     });
 
-    it("unlockTime 이후 소유자는 인출 가능", async function () {
-      const { lock, unlockTime, owner } = await loadFixture(deployLockFixture);
-      await time.increaseTo(unlockTime + 1);
-
-      // 직접 트랜잭션을 보내고 receipt에서 이벤트를 추출
-      const tx = await lock.connect(owner).withdraw();
-      const receipt = await tx.wait();
-
-      // Withdrawal 이벤트 찾기
-      const event = receipt.events?.find((e:any) => e.event === "Withdrawal");
-      expect(event, "Withdrawal 이벤트가 있어야 합니다").to.not.be.undefined;
-
-      const [amount, when] = event!.args!;
-      expect(amount).to.equal(ethers.utils.parseEther("1.0"));
-      expect(when.toNumber()).to.be.at.least(unlockTime);
+    it('unlockTime 이후 소유자는 인출 가능', async () => {
+      await ethers.provider.send('evm_increaseTime', [ONE_DAY + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await expect(lock.withdraw())
+        .to.emit(lock, 'Withdrawal')
+        .withArgs(await owner.getAddress(), ethers.utils.parseEther('1'));
     });
 
-    it("unlockTime 이후 소유자가 아니면 출금 불가", async function () {
-      const { lock, unlockTime, other } = await loadFixture(deployLockFixture);
-      await time.increaseTo(unlockTime + 1);
-      await expect(lock.connect(other).withdraw()).to.be.revertedWith(
+    it('unlockTime 이후 소유자가 아니면 출금 불가', async () => {
+      await ethers.provider.send('evm_increaseTime', [ONE_DAY + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await expect(lock.connect(nonOwner).withdraw()).to.be.revertedWith(
         "You aren't the owner"
       );
     });

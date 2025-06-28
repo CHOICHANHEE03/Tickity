@@ -142,6 +142,7 @@ class ApiClient {
   async delete<T>(endpoint: string): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, { method: 'DELETE' });
   }
+
   // 이메일 유효성 검증
   async validateEmail(email: string): Promise<ApiResponse<{ valid: boolean; message?: string }>> {
     return this.request<{ valid: boolean; message?: string }>('/auth/validate-email', {
